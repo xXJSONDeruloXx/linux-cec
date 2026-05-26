@@ -11,9 +11,10 @@ keywords = ["cec"]
 categories = ["api-bindings", "hardware-support"]
 
 [features]
-default = ["async", "cectool", "tracing"]
+default = ["async", "cec-attach-tty", "cectool", "tracing"]
 async = ["dep:tokio"]
 cectool = ["dep:clap"]
+cec-attach-tty = ["nix/term", "dep:udev"]
 tracing = ["dep:tracing"]
 serde = ["dep:serde"]
 
@@ -22,6 +23,10 @@ serde = ["dep:serde"]
 [[bin]]
 name = "cectool"
 required-features = ["cectool"]
+
+[[bin]]
+name = "cec-attach-tty"
+required-features = ["cec-attach-tty"]
 
 [dev-dependencies]
 serde_json = "1.0"
@@ -40,3 +45,4 @@ thiserror = "2.0"
 tinyvec = "1.9"
 tracing = { version = "0.1", default-features = false, optional = true }
 tokio = { version = "1", default-features = false, features = ["fs", "macros", "rt-multi-thread", "sync"], optional = true }
+udev = { version = "0.9", optional = true }

@@ -485,6 +485,7 @@ dependencies = [
  "tinyvec",
  "tokio",
  "tracing",
+ "udev",
 ]
 
 [[package]]

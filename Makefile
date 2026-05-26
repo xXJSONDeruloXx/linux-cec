@@ -36,6 +36,7 @@ install: target/release/cecd target/release/cectool
 	install -m 644 cecd/data/udev-rules.d/60-cecd-uinput.rules "$(DESTDIR)$(UDEV_RULES_DIR)"
 	install -m 755 target/release/cecd "$(DESTDIR)$(BINDIR)/cecd"
 	install -m 755 target/release/cectool "$(DESTDIR)$(BINDIR)/cectool"
+	install -m 755 target/release/cec-attach-tty "$(DESTDIR)$(BINDIR)/cec-attach-tty"
 	install -m 644 cecd/data/cecd.service "$(DESTDIR)$(SYSTEMD_USER_UNIT_DIR)"
 	install -m 644 cecd/data/com.steampowered.CecDaemon1.service "$(DESTDIR)$(DBUS_SESSION_BUS_SERVICES_DIR)"
 	install -m 644 $(patsubst %,cecd/data/dbus-interfaces/com.steampowered.CecDaemon1.%.xml,$(INTERFACES)) "$(DESTDIR)$(DBUS_INTERFACES_DIR)"
