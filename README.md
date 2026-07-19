@@ -83,6 +83,7 @@ The configuration files are stored in [TOML format](https://toml.io/en/), with t
   table at all will unset all of the default mappings.
 - `wake_tv`: Should cecd attempt to wake the TV when the device is woken? Defaults to false.
 - `suspend_tv`: Should cecd attempt to suspend the TV when the device is suspended? Defaults to false.
+- `inactive_source_on_suspend`: Should cecd announce that it is no longer active when suspended? Defaults to true.
 - `allow_standby`: Should cecd attempt to suspend when receiving a Standby command? Defaults to false.
 - `uinput`: Should uinput mappings be enabled. Defaults to true.
 - `request_active_source`: Should cecd attempt to determine if it's the active source when it wakes up or starts. In

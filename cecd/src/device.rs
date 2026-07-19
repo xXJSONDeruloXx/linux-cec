@@ -33,6 +33,7 @@ use crate::{ArcDevice, AsyncDevicePoller};
 
 const LOG_ADDR_RETRIES: i32 = 20;
 const WAKE_TRIES: i32 = 2;
+const ACTIVE_SOURCE_DELAY: Duration = Duration::from_millis(100);
 const WAKE_DELAY: Duration = Duration::from_millis(1000);
 const REPLY_RETRIES: i32 = 4;
 
@@ -465,6 +466,7 @@ impl DeviceTask {
     async fn wake(&mut self) -> Result<()> {
         self.device.lock().await.wake(false, false).await?;
         self.awaiting_wake = true;
+        sleep(ACTIVE_SOURCE_DELAY).await;
         for _ in 0..WAKE_TRIES {
             let result = self.device.lock().await.set_active_source(None).await;
             match result {
@@ -512,6 +514,28 @@ impl DeviceTask {
                 from_standby,
             } => {
                 if from_standby {
+                    for attempt in 0..5 {
+                        self.connector = self
+                            .system
+                            .lock()
+                            .await
+                            .configure_dev(self.device.clone(), self.connector.as_ref())
+                            .await?;
+                        if self
+                            .device
+                            .lock()
+                            .await
+                            .poll_address(LogicalAddress::Tv)
+                            .await
+                            .is_ok()
+                            || attempt == 4
+                        {
+                            break;
+                        }
+                        sleep(Duration::from_secs(1)).await;
+                    }
+                }
+                if from_standby {
                     let device = self.device.clone();
                     self.with_logical_address(Box::new(|_| {
                         Box::new(async move {
@@ -550,10 +574,12 @@ impl DeviceTask {
             }
             SystemMessage::Standby { standby_tv, force } => {
                 let device = self.device.lock().await;
-                let address = device.get_physical_address().await?;
-                device
-                    .tx_message(&Message::InactiveSource { address }, LogicalAddress::Tv)
-                    .await?;
+                if self.system.lock().await.config.inactive_source_on_suspend {
+                    let address = device.get_physical_address().await?;
+                    device
+                        .tx_message(&Message::InactiveSource { address }, LogicalAddress::Tv)
+                        .await?;
+                }
                 if force || (self.active && standby_tv) {
                     device.standby(LogicalAddress::Tv).await?;
                 }
@@ -1815,7 +1841,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_wake_from_standby_deferred() {
+    async fn test_wake_from_standby_reconfigures() {
         let test = setup_basic_test().await.unwrap();
 
         let interface: InterfaceRef<CecDevice> = test
@@ -1849,27 +1875,6 @@ mod test {
             .unwrap();
         }
 
-        assert_eq!(rx_message(&test.dev).await, None);
-
-        {
-            let dev = interface.get_mut().await;
-            dev.device
-                .lock()
-                .await
-                .set_logical_addresses(&[LogicalAddressType::Playback])
-                .await
-                .unwrap();
-            assert_eq!(
-                dev.device
-                    .lock()
-                    .await
-                    .get_logical_addresses()
-                    .await
-                    .unwrap(),
-                &[LogicalAddress::PlaybackDevice1]
-            );
-        }
-
         assert_eq!(
             rx_message(&test.dev).await.unwrap(),
             (
@@ -1878,6 +1883,10 @@ mod test {
                 },
                 LogicalAddress::Broadcast
             )
+        );
+        assert_eq!(
+            test.dev.lock().await.get_logical_addresses().await.unwrap(),
+            &[LogicalAddress::PlaybackDevice1]
         );
     }
 

@@ -343,7 +343,7 @@ impl AsyncDevice {
     }
 
     pub async fn poll_address(&self, _destination: LogicalAddress) -> Result<()> {
-        todo!();
+        Ok(())
     }
 
     pub async fn handle_status(&self, status: PollStatus) -> Result<Vec<PollResult>> {
@@ -589,6 +589,7 @@ pub(crate) async fn setup_basic_test() -> anyhow::Result<DBusTest<'static>> {
     let config = Config {
         uinput: false,
         logical_address: LogicalAddressType::Playback,
+        inactive_source_on_suspend: true,
         ..Config::default()
     };
     setup_dbus_test(cb, Some(config)).await
