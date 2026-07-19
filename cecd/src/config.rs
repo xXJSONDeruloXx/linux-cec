@@ -81,6 +81,10 @@ pub(crate) struct Config {
     /// Should cecd attempt to suspend the TV when the device is suspended? Defaults to false.
     #[serde(default)]
     pub suspend_tv: bool,
+    /// Should cecd announce that it is no longer the active source when the device is suspended?
+    /// Defaults to true.
+    #[serde(default = "de_true")]
+    pub inactive_source_on_suspend: bool,
     /// Should cecd attempt to suspend when receiving a Standby command? Defaults to false.
     #[serde(default)]
     pub allow_standby: bool,

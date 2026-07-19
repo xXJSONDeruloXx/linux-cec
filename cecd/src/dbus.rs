@@ -200,6 +200,12 @@ impl CecConfig {
             }
         }
 
+        if self.cached_config.inactive_source_on_suspend != old_config.inactive_source_on_suspend {
+            if let Err(e) = self.inactive_source_on_suspend_changed(emitter).await {
+                warn!("Failed to emit InactiveSourceOnSuspend changed: {e}");
+            }
+        }
+
         if self.cached_config.allow_standby != old_config.allow_standby {
             if let Err(e) = self.allow_standby_changed(emitter).await {
                 warn!("Failed to emit AllowStandby changed: {e}");
@@ -258,6 +264,11 @@ impl CecConfig {
     #[zbus(property)]
     pub async fn suspend_tv(&self) -> bool {
         self.cached_config.suspend_tv
+    }
+
+    #[zbus(property)]
+    pub async fn inactive_source_on_suspend(&self) -> bool {
+        self.cached_config.inactive_source_on_suspend
     }
 
     #[zbus(property)]
@@ -822,6 +833,10 @@ mod test {
         assert_eq!(config_proxy.wake_tv().await.unwrap(), config.wake_tv);
         assert_eq!(config_proxy.suspend_tv().await.unwrap(), config.suspend_tv);
         assert_eq!(
+            config_proxy.inactive_source_on_suspend().await.unwrap(),
+            config.inactive_source_on_suspend
+        );
+        assert_eq!(
             config_proxy.allow_standby().await.unwrap(),
             config.allow_standby
         );
@@ -1023,6 +1038,45 @@ mod test {
 
         let mut receiver = config_proxy.receive_suspend_tv_changed().await;
         test.system.lock().await.config.suspend_tv = true;
+        let iface = test
+            .connection
+            .object_server()
+            .interface::<_, CecConfig>(format!("{PATH}/Daemon"))
+            .await
+            .unwrap();
+        iface
+            .get_mut()
+            .await
+            .reconfigure(iface.signal_emitter())
+            .await;
+        let msg = receiver.next().await.unwrap();
+        assert!(msg.get().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_inactive_source_on_suspend_config_readout() {
+        let mut config = Config::default();
+        config.inactive_source_on_suspend = !config.inactive_source_on_suspend;
+        let (_test, config_proxy) = setup_config_test(&config).await.unwrap();
+
+        assert_eq!(
+            config_proxy.inactive_source_on_suspend().await.unwrap(),
+            config.inactive_source_on_suspend
+        );
+    }
+
+    #[tokio::test]
+    async fn test_inactive_source_on_suspend_config_reconfig() {
+        let config = Config {
+            inactive_source_on_suspend: false,
+            ..Config::default()
+        };
+        let (test, config_proxy) = setup_config_test(&config).await.unwrap();
+
+        let mut receiver = config_proxy
+            .receive_inactive_source_on_suspend_changed()
+            .await;
+        test.system.lock().await.config.inactive_source_on_suspend = true;
         let iface = test
             .connection
             .object_server()

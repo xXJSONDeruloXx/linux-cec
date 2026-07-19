@@ -25,6 +25,10 @@ pub trait Config1 {
     #[zbus(property)]
     fn allow_standby(&self) -> zbus::Result<bool>;
 
+    /// InactiveSourceOnSuspend property
+    #[zbus(property)]
+    fn inactive_source_on_suspend(&self) -> zbus::Result<bool>;
+
     /// Uinput property
     #[zbus(property)]
     fn uinput(&self) -> zbus::Result<bool>;

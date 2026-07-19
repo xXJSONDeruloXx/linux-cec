@@ -53,6 +53,14 @@
     <property name="SuspendTv" type="b" access="read"/>
 
     <!--
+      InactiveSourceOnSuspend:
+
+      If the daemon announces that this device is no longer the active source
+      when it enters suspend.
+    -->
+    <property name="InactiveSourceOnSuspend" type="b" access="read"/>
+
+    <!--
       AllowStandby:
 
       If the daemon is configured to suspend the device when the TV enters

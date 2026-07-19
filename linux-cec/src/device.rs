@@ -9,6 +9,7 @@ use linux_cec_sys::constants::{
     CEC_CONNECTOR_TYPE_DRM, CEC_CONNECTOR_TYPE_NO_CONNECTOR, CEC_EVENT_LOST_MSGS,
     CEC_EVENT_PIN_5V_HIGH, CEC_EVENT_PIN_5V_LOW, CEC_EVENT_PIN_CEC_HIGH, CEC_EVENT_PIN_CEC_LOW,
     CEC_EVENT_PIN_HPD_HIGH, CEC_EVENT_PIN_HPD_LOW, CEC_EVENT_STATE_CHANGE, CEC_MAX_LOG_ADDRS,
+    CEC_MAX_MSG_SIZE,
 };
 use linux_cec_sys::ioctls::{
     adapter_get_capabilities, adapter_get_connector_info, adapter_get_logical_addresses,
@@ -114,7 +115,12 @@ impl TryFrom<cec_msg> for Envelope {
         if message.rx_status.contains(CEC_RX_STATUS::FEATURE_ABORT) {
             return Err(RxError::FeatureAbort.into());
         }
-        if !(2..=15).contains(&message.len) {
+        if !(2..=CEC_MAX_MSG_SIZE as u32).contains(&message.len) {
+            #[cfg(feature = "tracing")]
+            warn!(
+                "Incoming CEC message has invalid length {} (header: {:#04x}, rx status: {:?})",
+                message.len, message.msg[0], message.rx_status
+            );
             return Err(Error::InvalidData);
         }
         let bytes = &message.msg[1..message.len as usize];
@@ -129,9 +135,10 @@ impl TryFrom<cec_msg> for Envelope {
                 #[cfg(feature = "tracing")]
                 warn!("Failed to parse incoming message {bytes:?}: {e}");
                 let _ = e;
+                let invalid_len = usize::min(bytes.len(), 14);
                 MessageData::Invalid(ArrayVec::from_array_len(
                     message.msg[1..15].try_into().unwrap(),
-                    bytes.len(),
+                    invalid_len,
                 ))
             }
         };
@@ -230,7 +237,7 @@ mod test_envelope {
     }
 
     #[test]
-    fn decode_too_long() {
+    fn decode_max_length() {
         let msg = cec_msg {
             tx_ts: 0,
             rx_ts: 0,
@@ -240,21 +247,21 @@ mod test_envelope {
             flags: CEC_MSG_FL::empty(),
             msg: [
                 0xF,
-                Opcode::Standby as u8,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
+                Opcode::VendorCommandWithId as u8,
+                0x08,
+                0x00,
+                0x46,
+                0x00,
+                0x13,
+                0x00,
+                0x10,
+                0x80,
+                0x90,
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
             ],
             reply: 0,
             rx_status: CEC_RX_STATUS::OK,
@@ -264,6 +271,33 @@ mod test_envelope {
             tx_low_drive_cnt: 0,
             tx_error_cnt: 0,
         };
+
+        let envelope = Envelope::try_from(msg).unwrap();
+        assert_eq!(envelope.message.opcode(), Opcode::VendorCommandWithId as u8);
+        assert!(matches!(envelope.message, MessageData::Valid(_)));
+    }
+
+    #[test]
+    fn decode_invalid_max_length() {
+        let mut msg = cec_msg::from_timeout(0);
+        msg.len = CEC_MAX_MSG_SIZE as u32;
+        msg.msg[0] = 0x0F;
+        msg.msg[1] = 0xFE;
+        msg.rx_status = CEC_RX_STATUS::OK;
+
+        let envelope = Envelope::try_from(msg).unwrap();
+        let MessageData::Invalid(message) = envelope.message else {
+            panic!();
+        };
+        assert_eq!(message.len(), 14);
+        assert_eq!(message[0], 0xFE);
+    }
+
+    #[test]
+    fn decode_too_long() {
+        let mut msg = cec_msg::from_timeout(0);
+        msg.len = CEC_MAX_MSG_SIZE as u32 + 1;
+        msg.rx_status = CEC_RX_STATUS::OK;
 
         let Err(err) = Envelope::try_from(msg) else {
             panic!();
@@ -698,7 +732,10 @@ impl Device {
         self.tx_raw_message(&mut raw_message)?;
         if !raw_message.tx_status.contains(CEC_TX_STATUS::OK) {
             #[cfg(feature = "tracing")]
-            warn!("Message failed to send: {:?}", raw_message.tx_status);
+            warn!(
+                "Message {message:?} to {destination} ({:x}) failed to send: {:?}",
+                destination as u8, raw_message.tx_status
+            );
             return Err(raw_message.tx_status.into());
         }
         raw_message.try_into()
@@ -732,7 +769,10 @@ impl Device {
         self.tx_raw_message(&mut raw_message)?;
         if !raw_message.tx_status.contains(CEC_TX_STATUS::OK) {
             #[cfg(feature = "tracing")]
-            warn!("Poll failed: {:?}", raw_message.tx_status);
+            warn!(
+                "Poll to {destination} ({:x}) failed: {:?}",
+                destination as u8, raw_message.tx_status
+            );
             return Err(raw_message.tx_status.into());
         }
         Ok(())
@@ -813,7 +853,11 @@ impl Device {
                     pin: Pin::Power5V,
                     state: PinState::High,
                 })),
-                _ => return Err(Error::InvalidData),
+                event => {
+                    #[cfg(feature = "tracing")]
+                    warn!("Unknown CEC event {event} with flags {:?}", ev.flags);
+                    return Err(Error::InvalidData);
+                }
             }
         }
 

@@ -33,7 +33,15 @@ use crate::{ArcDevice, AsyncDevicePoller};
 
 const LOG_ADDR_RETRIES: i32 = 20;
 const WAKE_TRIES: i32 = 2;
+const ACTIVE_SOURCE_DELAY: Duration = Duration::from_millis(100);
 const WAKE_DELAY: Duration = Duration::from_millis(1000);
+const RESUME_RECONFIG_DELAYS: [Duration; 5] = [
+    Duration::ZERO,
+    Duration::from_millis(250),
+    Duration::from_millis(500),
+    Duration::from_millis(1000),
+    Duration::from_millis(2000),
+];
 const REPLY_RETRIES: i32 = 4;
 
 type CallbackFut<'a> = Box<dyn Future<Output = Result<()>> + Send + 'a>;
@@ -465,6 +473,7 @@ impl DeviceTask {
     async fn wake(&mut self) -> Result<()> {
         self.device.lock().await.wake(false, false).await?;
         self.awaiting_wake = true;
+        sleep(ACTIVE_SOURCE_DELAY).await;
         for _ in 0..WAKE_TRIES {
             let result = self.device.lock().await.set_active_source(None).await;
             match result {
@@ -505,12 +514,95 @@ impl DeviceTask {
         Ok(())
     }
 
+    async fn reconfigure_after_resume(&mut self) {
+        for (attempt, delay) in RESUME_RECONFIG_DELAYS.into_iter().enumerate() {
+            sleep(delay).await;
+            match self
+                .system
+                .lock()
+                .await
+                .configure_dev(self.device.clone(), self.connector.as_ref())
+                .await
+            {
+                Ok(connector) => self.connector = connector,
+                Err(err) => {
+                    warn!(
+                        "Failed to reconfigure CEC adapter after resume on attempt {}: {err}",
+                        attempt + 1
+                    );
+                    continue;
+                }
+            }
+
+            let device = self.device.lock().await;
+            let physical_address = match device.get_physical_address().await {
+                Ok(address) if address != PhysicalAddress::default() => address,
+                Ok(_) => {
+                    debug!(
+                        "CEC adapter still has an invalid physical address after resume attempt {}",
+                        attempt + 1
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to read CEC physical address after resume attempt {}: {err}",
+                        attempt + 1
+                    );
+                    continue;
+                }
+            };
+            if device
+                .get_logical_addresses()
+                .await
+                .unwrap_or_default()
+                .is_empty()
+            {
+                debug!(
+                    "CEC adapter still has no logical address after resume attempt {}",
+                    attempt + 1
+                );
+                continue;
+            }
+            match device.poll_address(LogicalAddress::Tv).await {
+                Ok(()) => {
+                    info!(
+                        "CEC adapter at {physical_address} reconfigured after resume; TV reachable on attempt {}",
+                        attempt + 1
+                    );
+                    return;
+                }
+                Err(err) => debug!(
+                    "CEC adapter reconfigured after resume attempt {}, but TV is unreachable: {err}",
+                    attempt + 1
+                ),
+            }
+        }
+
+        warn!(
+            "CEC adapter reconfigured after resume, but TV remained unreachable after {} attempts",
+            RESUME_RECONFIG_DELAYS.len()
+        );
+    }
+
     async fn handle_system_message(&mut self, message: SystemMessage) -> Result<()> {
         match message {
             SystemMessage::Wake {
                 wake_tv,
                 from_standby,
             } => {
+                if from_standby {
+                    self.reconfigure_after_resume().await;
+                }
+                if wake_tv {
+                    self.with_logical_address(Box::new(|task| {
+                        Box::new(async move {
+                            task.wake().await?;
+                            Ok(())
+                        })
+                    }))
+                    .await;
+                }
                 if from_standby {
                     let device = self.device.clone();
                     self.with_logical_address(Box::new(|_| {
@@ -537,25 +629,34 @@ impl DeviceTask {
                         .await;
                     }
                 }
-                if wake_tv {
-                    self.with_logical_address(Box::new(|task| {
-                        Box::new(async move {
-                            task.wake().await?;
-                            Ok(())
-                        })
-                    }))
-                    .await;
-                }
                 Ok(())
             }
             SystemMessage::Standby { standby_tv, force } => {
+                let inactive_source_on_suspend =
+                    self.system.lock().await.config.inactive_source_on_suspend;
                 let device = self.device.lock().await;
-                let address = device.get_physical_address().await?;
-                device
-                    .tx_message(&Message::InactiveSource { address }, LogicalAddress::Tv)
-                    .await?;
+                if inactive_source_on_suspend {
+                    match device.get_physical_address().await {
+                        Ok(address) => {
+                            if let Err(err) = device
+                                .tx_message(
+                                    &Message::InactiveSource { address },
+                                    LogicalAddress::Tv,
+                                )
+                                .await
+                            {
+                                warn!("Failed to send Inactive Source to TV (0): {err}");
+                            }
+                        }
+                        Err(err) => warn!(
+                            "Failed to get physical address for Inactive Source to TV (0): {err}"
+                        ),
+                    }
+                }
                 if force || (self.active && standby_tv) {
-                    device.standby(LogicalAddress::Tv).await?;
+                    if let Err(err) = device.standby(LogicalAddress::Tv).await {
+                        warn!("Failed to send Standby to TV (0): {err}");
+                    }
                 }
                 Ok(())
             }
@@ -960,6 +1061,42 @@ mod test {
                 LogicalAddress::Tv
             )
         );
+        assert_eq!(
+            rx_message(&test.dev).await.unwrap(),
+            (Message::Standby {}, LogicalAddress::Tv)
+        );
+        assert!(rx_message(&test.dev).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_system_message_standby_without_inactive_source() {
+        let test = setup_basic_test().await.unwrap();
+        test.system.lock().await.config.inactive_source_on_suspend = false;
+        tx_message(
+            &test.dev,
+            Message::RoutingChange {
+                new_address: PhysicalAddress::from(0x1000),
+                original_address: PhysicalAddress::from(0x0000),
+            },
+            LogicalAddress::Tv,
+        )
+        .await;
+
+        let interface: InterfaceRef<CecDevice> = test
+            .connection
+            .object_server()
+            .interface("/com/steampowered/CecDaemon1/Devices/Null")
+            .await
+            .unwrap();
+        {
+            let dev = interface.get_mut().await;
+            dev.send_system_message(SystemMessage::Standby {
+                standby_tv: true,
+                force: false,
+            })
+            .await
+            .unwrap();
+        }
         assert_eq!(
             rx_message(&test.dev).await.unwrap(),
             (Message::Standby {}, LogicalAddress::Tv)
@@ -1815,7 +1952,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_wake_from_standby_deferred() {
+    async fn test_wake_from_standby_restores_logical_address() {
         let test = setup_basic_test().await.unwrap();
 
         let interface: InterfaceRef<CecDevice> = test
@@ -1849,25 +1986,41 @@ mod test {
             .unwrap();
         }
 
-        assert_eq!(rx_message(&test.dev).await, None);
+        assert_eq!(
+            rx_message(&test.dev).await.unwrap(),
+            (
+                Message::ReportPowerStatus {
+                    status: PowerStatus::On
+                },
+                LogicalAddress::Broadcast
+            )
+        );
+        assert_eq!(
+            test.dev.lock().await.get_logical_addresses().await.unwrap(),
+            &[LogicalAddress::PlaybackDevice1]
+        );
+    }
 
+    #[tokio::test]
+    async fn test_wake_from_standby_retries_reconfiguration_until_tv_reachable() {
+        let test = setup_basic_test().await.unwrap();
+        test.dev.lock().await.queue_poll_result(false).await;
+        test.dev.lock().await.queue_poll_result(true).await;
+
+        let interface: InterfaceRef<CecDevice> = test
+            .connection
+            .object_server()
+            .interface("/com/steampowered/CecDaemon1/Devices/Null")
+            .await
+            .unwrap();
         {
             let dev = interface.get_mut().await;
-            dev.device
-                .lock()
-                .await
-                .set_logical_addresses(&[LogicalAddressType::Playback])
-                .await
-                .unwrap();
-            assert_eq!(
-                dev.device
-                    .lock()
-                    .await
-                    .get_logical_addresses()
-                    .await
-                    .unwrap(),
-                &[LogicalAddress::PlaybackDevice1]
-            );
+            dev.send_system_message(SystemMessage::Wake {
+                wake_tv: false,
+                from_standby: true,
+            })
+            .await
+            .unwrap();
         }
 
         assert_eq!(

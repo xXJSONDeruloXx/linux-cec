@@ -1514,20 +1514,8 @@ mod test_set_timer_program_title {
             title: operand::BufferOperand::from_str("12345678901234").unwrap(),
         },
         bytes: [
-            b'1',
-            b'2',
-            b'3',
-            b'4',
-            b'5',
-            b'6',
-            b'7',
-            b'8',
-            b'9',
-            b'0',
-            b'1',
-            b'2',
-            b'3',
-            b'4'
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33,
+            0x34,
         ],
     }
 
@@ -1885,20 +1873,8 @@ mod test_vendor_command {
             command: operand::BufferOperand::from_str("12345678901234").unwrap(),
         },
         bytes: [
-            b'1',
-            b'2',
-            b'3',
-            b'4',
-            b'5',
-            b'6',
-            b'7',
-            b'8',
-            b'9',
-            b'0',
-            b'1',
-            b'2',
-            b'3',
-            b'4'
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33,
+            0x34,
         ],
     }
 
@@ -1999,20 +1975,8 @@ mod test_vendor_remote_button_down {
             rc_code: operand::BufferOperand::from_str("12345678901234").unwrap(),
         },
         bytes: [
-            b'1',
-            b'2',
-            b'3',
-            b'4',
-            b'5',
-            b'6',
-            b'7',
-            b'8',
-            b'9',
-            b'0',
-            b'1',
-            b'2',
-            b'3',
-            b'4'
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33,
+            0x34,
         ],
     }
 
@@ -2112,20 +2076,8 @@ mod test_set_osd_name {
             name: operand::BufferOperand::from_str("12345678901234").unwrap(),
         },
         bytes: [
-            b'1',
-            b'2',
-            b'3',
-            b'4',
-            b'5',
-            b'6',
-            b'7',
-            b'8',
-            b'9',
-            b'0',
-            b'1',
-            b'2',
-            b'3',
-            b'4'
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33,
+            0x34,
         ],
     }
 

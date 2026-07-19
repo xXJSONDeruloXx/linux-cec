@@ -11,7 +11,7 @@ use linux_cec::message::{Message, Opcode};
 use linux_cec::operand::{BufferOperand, UiCommand};
 use linux_cec::{
     Error, FollowerMode, InitiatorMode, LogicalAddress, LogicalAddressType, PhysicalAddress,
-    Result, Timeout, VendorId,
+    Result, Timeout, TxError, VendorId,
 };
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
@@ -55,6 +55,7 @@ struct DeviceState {
     tx_queue: VecDeque<(Message, LogicalAddress)>,
     rx_queue: VecDeque<Envelope>,
     rx_empty: Vec<Arc<Notify>>,
+    poll_results: VecDeque<bool>,
     sequence: u32,
 }
 
@@ -99,6 +100,7 @@ impl AsyncDevice {
                 tx_queue: VecDeque::new(),
                 rx_queue: VecDeque::new(),
                 rx_empty: Vec::new(),
+                poll_results: VecDeque::new(),
                 sequence: 1,
             }),
         })
@@ -126,6 +128,14 @@ impl AsyncDevice {
         for poller in state.pollers.iter() {
             poller.send(PollStatus::GotMessage).await.unwrap();
         }
+    }
+
+    pub(crate) async fn queue_poll_result(&self, acknowledged: bool) {
+        self.state
+            .write()
+            .await
+            .poll_results
+            .push_back(acknowledged);
     }
 
     pub(crate) async fn send_rx_message(
@@ -343,7 +353,18 @@ impl AsyncDevice {
     }
 
     pub async fn poll_address(&self, _destination: LogicalAddress) -> Result<()> {
-        todo!();
+        if self
+            .state
+            .write()
+            .await
+            .poll_results
+            .pop_front()
+            .unwrap_or(true)
+        {
+            Ok(())
+        } else {
+            Err(TxError::Nack.into())
+        }
     }
 
     pub async fn handle_status(&self, status: PollStatus) -> Result<Vec<PollResult>> {
@@ -589,6 +610,7 @@ pub(crate) async fn setup_basic_test() -> anyhow::Result<DBusTest<'static>> {
     let config = Config {
         uinput: false,
         logical_address: LogicalAddressType::Playback,
+        inactive_source_on_suspend: true,
         ..Config::default()
     };
     setup_dbus_test(cb, Some(config)).await
