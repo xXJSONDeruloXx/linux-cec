@@ -14,7 +14,7 @@ use std::collections::hash_map::{Entry, HashMap};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::fs::read_dir;
 use tokio::spawn;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
@@ -36,6 +36,8 @@ use crate::device::DrmConnector;
 use crate::message_handler::{MessageHandler, MessageHandlerTask};
 use crate::ArcDevice;
 
+const RESUME_WAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Debug)]
 pub(crate) struct System {
     osd_name: String,
@@ -49,6 +51,7 @@ pub(crate) struct System {
     token: CancellationToken,
     devs: HashMap<PathBuf, CancellationToken>,
     standby: bool,
+    resume_wake_deadline: Option<Instant>,
 
     message_handlers: HashMap<u8, MessageHandlerHandle>,
 }
@@ -217,6 +220,7 @@ impl System {
             channel,
             config_path,
             standby: false,
+            resume_wake_deadline: None,
             message_handlers: HashMap::new(),
         })
     }
@@ -430,6 +434,13 @@ impl System {
         let _ = self.channel.send(message);
     }
 
+    fn take_resume_wake(&mut self) -> bool {
+        let Some(deadline) = self.resume_wake_deadline.take() else {
+            return false;
+        };
+        Instant::now() < deadline
+    }
+
     async fn find_physical_address() -> Result<Option<DrmConnector>> {
         let mut adapter = None;
         let mut dir = read_dir("/sys/class/drm").await?;
@@ -495,7 +506,24 @@ impl SystemHandle {
             connection = system.connection.clone();
         }
         let token = dev.token.clone();
+        let dbus_path = dev.dbus_path().to_owned();
         dev.register(connection.clone(), self.clone()).await?;
+        let wake_tv = self.lock().await.take_resume_wake();
+        if wake_tv {
+            debug!("Waking TV after CEC device registered following resume");
+            let interface = connection
+                .object_server()
+                .interface::<_, CecDevice>(dbus_path.as_ref())
+                .await?;
+            interface
+                .get()
+                .await
+                .send_system_message(SystemMessage::Wake {
+                    wake_tv: true,
+                    from_standby: true,
+                })
+                .await?;
+        }
         Ok(token)
     }
 
@@ -532,6 +560,7 @@ impl SystemHandle {
             if !sleep {
                 system.standby = false;
                 let wake_tv = system.config.wake_tv;
+                system.resume_wake_deadline = wake_tv.then(|| Instant::now() + RESUME_WAKE_TIMEOUT);
                 debug!(
                     "Woke from standby. {} TV.",
                     if wake_tv { "Waking" } else { "Not waking" }
@@ -808,6 +837,19 @@ mod test {
         let test = setup_dbus_test(cb, None).await.unwrap();
 
         assert!(test.system.list_handled_messages().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_resume_wake_is_one_time() {
+        let test = setup_dbus_test(cb, None).await.unwrap();
+        let mut system = test.system.lock().await;
+
+        system.resume_wake_deadline = Some(Instant::now() + RESUME_WAKE_TIMEOUT);
+        assert!(system.take_resume_wake());
+        assert!(!system.take_resume_wake());
+
+        system.resume_wake_deadline = Some(Instant::now());
+        assert!(!system.take_resume_wake());
     }
 
     #[tokio::test]
