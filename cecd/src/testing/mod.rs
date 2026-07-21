@@ -343,7 +343,7 @@ impl AsyncDevice {
     }
 
     pub async fn poll_address(&self, _destination: LogicalAddress) -> Result<()> {
-        todo!();
+        Ok(())
     }
 
     pub async fn handle_status(&self, status: PollStatus) -> Result<Vec<PollResult>> {
