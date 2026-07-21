@@ -143,7 +143,7 @@ impl CecTtyPoller {
             match res {
                 Ok(n) if n < 1 => continue,
                 Ok(_) => (),
-                Err(e) if e == Errno::EINTR => continue,
+                Err(Errno::EINTR) => continue,
                 Err(e) => return Err(e.into()),
             }
             match fds[0].revents() {
